@@ -1,8 +1,12 @@
 export const API_BASE =
-  (import.meta.env.VITE_API_URL as string | undefined) ??
-  // Single-process deploy (Render/Heroku/`node src/index.js`): the React app and
-  // the API share one origin, so use relative paths — no host to hardcode.
-  (import.meta.env.PROD ? '' : 'http://localhost:5001');
+  // Production builds always call the API on their own origin: the Express
+  // server serves both the React app and /api (single-process deploy).
+  // VITE_API_URL from client/.env must NOT leak into prod builds — it pins
+  // http://localhost:5001, which in a visitor's browser points at *their*
+  // machine and every dashboard fetch fails.
+  import.meta.env.PROD
+    ? ''
+    : ((import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:5001');
 
 export const BACKEND_ORIGIN = (() => {
   if (API_BASE === '') return window.location.origin;

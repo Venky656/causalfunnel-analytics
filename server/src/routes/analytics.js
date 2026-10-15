@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Event } from '../models/Event.js';
 import { memoryStore } from '../memoryStore.js';
 import { parsePagination, parseSource } from '../validate.js';
-import { dbReady } from '../db.js';
+import { dbReady, isNetworkError } from '../db.js';
 
 export const analyticsRouter = Router();
 
@@ -12,20 +12,22 @@ function matchSource(source) {
 
 /** GET /api/sessions?source=&search=&page=&limit= — session summaries from stored events. */
 analyticsRouter.get('/sessions', async (req, res, next) => {
-  try {
-    const source = parseSource(req.query.source);
-    const search = String(req.query.search ?? '').trim();
-    const { page, limit } = parsePagination(req.query);
+  const source = parseSource(req.query.source);
+  const search = String(req.query.search ?? '').trim();
+  const { page, limit } = parsePagination(req.query);
+  const fromMemory = (degraded = false) => {
+    const all = memoryStore.sessions({ source, search });
+    const total = all.length;
+    return res.json({
+      ok: true,
+      ...(degraded ? { degraded: true } : {}),
+      data: all.slice((page - 1) * limit, page * limit),
+      pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
+    });
+  };
 
-    if (!dbReady()) {
-      const all = memoryStore.sessions({ source, search });
-      const total = all.length;
-      return res.json({
-        ok: true,
-        data: all.slice((page - 1) * limit, page * limit),
-        pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
-      });
-    }
+  try {
+    if (!dbReady()) return fromMemory();
 
     const match = { ...matchSource(source) };
     if (search) match.session_id = { $regex: search, $options: 'i' };
@@ -63,15 +65,16 @@ analyticsRouter.get('/sessions', async (req, res, next) => {
       pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
     });
   } catch (err) {
+    if (isNetworkError(err)) return fromMemory(true);
     return next(err);
   }
 });
 
 /** GET /api/sessions/:id/events?source= — chronological event timeline for one session. */
 analyticsRouter.get('/sessions/:id/events', async (req, res, next) => {
+  const source = parseSource(req.query.source);
+  const sessionId = String(req.params.id);
   try {
-    const source = parseSource(req.query.source);
-    const sessionId = String(req.params.id);
     const data = dbReady()
       ? await Event.find({ session_id: sessionId, ...matchSource(source) })
           .sort({ timestamp: 1 })
@@ -79,6 +82,10 @@ analyticsRouter.get('/sessions/:id/events', async (req, res, next) => {
       : memoryStore.sessionEvents(sessionId, source);
     return res.json({ ok: true, session_id: sessionId, count: data.length, data });
   } catch (err) {
+    if (isNetworkError(err)) {
+      const data = memoryStore.sessionEvents(sessionId, source);
+      return res.json({ ok: true, degraded: true, session_id: sessionId, count: data.length, data });
+    }
     return next(err);
   }
 });
@@ -107,26 +114,34 @@ async function handleClicks(req, res) {
     }
   }
 
-  if (!dbReady()) {
-    const data = memoryStore.clicks(url, source, { from: fromDate, to: toDate });
-    return res.json({ ok: true, page_url: url, count: data.length, data });
-  }
   const timeFilter = {
     ...(fromDate ? { $gte: fromDate } : {}),
     ...(toDate ? { $lte: toDate } : {}),
   };
-  const data = await Event.find(
-    {
-      page_url: url,
-      event_type: 'click',
-      ...matchSource(source),
-      ...(Object.keys(timeFilter).length > 0 ? { timestamp: timeFilter } : {}),
-    },
-    { x: 1, y: 1, timestamp: 1, session_id: 1, viewport_width: 1, viewport_height: 1, page_width: 1, page_height: 1, data_source: 1, element_tag: 1, element_text: 1, element_section: 1, element_key: 1, element_rect: 1, _id: 0 }
-  )
-    .sort({ timestamp: 1 })
-    .lean();
-  return res.json({ ok: true, page_url: url, count: data.length, data });
+  let data;
+  let degraded = false;
+  if (!dbReady()) {
+    data = memoryStore.clicks(url, source, { from: fromDate, to: toDate });
+  } else {
+    try {
+      data = await Event.find(
+        {
+          page_url: url,
+          event_type: 'click',
+          ...matchSource(source),
+          ...(Object.keys(timeFilter).length > 0 ? { timestamp: timeFilter } : {}),
+        },
+        { x: 1, y: 1, timestamp: 1, session_id: 1, viewport_width: 1, viewport_height: 1, page_width: 1, page_height: 1, data_source: 1, element_tag: 1, element_text: 1, element_section: 1, element_key: 1, element_rect: 1, _id: 0 }
+      )
+        .sort({ timestamp: 1 })
+        .lean();
+    } catch (err) {
+      if (!isNetworkError(err)) throw err;
+      data = memoryStore.clicks(url, source, { from: fromDate, to: toDate });
+      degraded = true;
+    }
+  }
+  return res.json({ ok: true, ...(degraded ? { degraded: true } : {}), page_url: url, count: data.length, data });
 }
 
 analyticsRouter.get('/clicks', handleClicks);
@@ -235,14 +250,27 @@ function summariseElements(rows) {
  * a page-wide pixel smear.
  */
 analyticsRouter.get('/elements', async (req, res, next) => {
-  try {
-    const url = String(req.query.url ?? '');
-    if (!url) {
-      return res.status(400).json({ ok: false, error: 'query parameter "url" is required' });
-    }
-    const source = parseSource(req.query.source);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit ?? '60', 10) || 60));
+  const url = String(req.query.url ?? '');
+  if (!url) {
+    return res.status(400).json({ ok: false, error: 'query parameter "url" is required' });
+  }
+  const source = parseSource(req.query.source);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit ?? '60', 10) || 60));
+  const build = (rows, degraded = false) => {
+    const data = summariseElements(rows).slice(0, limit);
+    return res.json({
+      ok: true,
+      ...(degraded ? { degraded: true } : {}),
+      page_url: url,
+      source,
+      count: data.length,
+      total_clicks: data.reduce((n, e) => n + e.clicks, 0),
+      total_revenue: Math.round(data.reduce((n, e) => n + e.revenue, 0) * 100) / 100,
+      data,
+    });
+  };
 
+  try {
     let rows;
     if (dbReady()) {
       rows = await Event.find(
@@ -272,18 +300,9 @@ analyticsRouter.get('/elements', async (req, res, next) => {
     } else {
       rows = memoryStore.elements(url, source);
     }
-
-    const data = summariseElements(rows).slice(0, limit);
-    return res.json({
-      ok: true,
-      page_url: url,
-      source,
-      count: data.length,
-      total_clicks: data.reduce((n, e) => n + e.clicks, 0),
-      total_revenue: Math.round(data.reduce((n, e) => n + e.revenue, 0) * 100) / 100,
-      data,
-    });
+    return build(rows);
   } catch (err) {
+    if (isNetworkError(err)) return build(memoryStore.elements(url, source), true);
     return next(err);
   }
 });
@@ -296,8 +315,8 @@ analyticsRouter.get('/heatmap', (req, res) => {
 
 /** GET /api/pages?source= — distinct page URLs with event/click counts. */
 analyticsRouter.get('/pages', async (req, res, next) => {
+  const source = parseSource(req.query.source);
   try {
-    const source = parseSource(req.query.source);
     if (!dbReady()) {
       const data = memoryStore.pages(source);
       return res.json({ ok: true, count: data.length, data });
@@ -316,14 +335,18 @@ analyticsRouter.get('/pages', async (req, res, next) => {
     ]);
     return res.json({ ok: true, count: data.length, data });
   } catch (err) {
+    if (isNetworkError(err)) {
+      const data = memoryStore.pages(source);
+      return res.json({ ok: true, degraded: true, count: data.length, data });
+    }
     return next(err);
   }
 });
 
 /** GET /api/overview?source= — summary metrics computed from stored events. */
 analyticsRouter.get('/overview', async (req, res, next) => {
+  const source = parseSource(req.query.source);
   try {
-    const source = parseSource(req.query.source);
     if (!dbReady()) {
       return res.json({ ok: true, source, ...memoryStore.overview(source) });
     }
@@ -396,6 +419,9 @@ analyticsRouter.get('/overview', async (req, res, next) => {
       top_elements,
     });
   } catch (err) {
+    if (isNetworkError(err)) {
+      return res.json({ ok: true, degraded: true, source, ...memoryStore.overview(source) });
+    }
     return next(err);
   }
 });

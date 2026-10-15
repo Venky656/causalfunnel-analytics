@@ -23,19 +23,25 @@ export function createApp({ clientOrigin }) {
   // Read APIs are public so the heat overlay/bookmarklet can fetch click
   // data from any page. Event ingest stays restricted to known origins.
   const readCors = cors({ origin: '*' });
-  const writeCors = cors({
-    origin: (origin, cb) => {
-      // Allow same-origin / curl (no Origin header) and configured origins.
-      if (!origin || allowed.length === 0 || allowed.includes(origin)) return cb(null, true);
-      return cb(new Error('CORS: origin not allowed'));
-    },
-    // navigator.sendBeacon and credentialed fetches are sent with
-    // credentials:'include', which forces a CORS preflight. Browsers reject
-    // the response unless Access-Control-Allow-Credentials is 'true'. Without
-    // this header every live event from the tracker is silently dropped.
-    credentials: true,
-  });
-  app.use('/api', (req, res, next) => (req.method === 'GET' ? readCors : writeCors)(req, res, next));
+  const writeCorsFor = (req) =>
+    cors({
+      origin: (origin, cb) => {
+        // Always allow same-origin writes: CLIENT_ORIGIN pins *cross*-origin
+        // frontends (e.g. http://localhost:5173), but the app also serves its
+        // own UI (localhost:5001 / the deployed host) — blocking that silently
+        // dropped every live event from the production build.
+        const sameOrigin =
+          origin && (origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`);
+        if (!origin || sameOrigin || allowed.length === 0 || allowed.includes(origin)) return cb(null, true);
+        return cb(new Error('CORS: origin not allowed'));
+      },
+      // navigator.sendBeacon and credentialed fetches are sent with
+      // credentials:'include', which forces a CORS preflight. Browsers reject
+      // the response unless Access-Control-Allow-Credentials is 'true'. Without
+      // this header every live event from the tracker is silently dropped.
+      credentials: true,
+    });
+  app.use('/api', (req, res, next) => (req.method === 'GET' ? readCors : writeCorsFor(req))(req, res, next));
   app.use(express.json({ limit: '100kb' }));
   // Serve built React frontend (single-process deployment).
   app.use(express.static(path.join(__dirname, '..', '..', 'client', 'dist')));

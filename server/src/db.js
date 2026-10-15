@@ -67,3 +67,19 @@ export function dbReady() {
 export function dbStatus() {
   return dbReady() ? 'mongodb' : 'memory';
 }
+
+/**
+ * True for driver-level connectivity failures (TLS handshake blips, cleared
+ * pools, buffering timeouts). readyState can still report "connected" while
+ * an in-flight operation dies, so routes check this on *catch* too and
+ * degrade to the memory store instead of returning 500 / losing the event.
+ */
+export function isNetworkError(err) {
+  const msg = String(err?.message ?? err);
+  return (
+    err?.name === 'MongoNetworkError' ||
+    err?.name === 'MongoServerSelectionError' ||
+    err?.name === 'MongoBufferingTimeoutError' ||
+    /SSL|TLS|ECONN|ENOTFOUND|topology|ResetPool|connection pool|buffering timed out/i.test(msg)
+  );
+}
