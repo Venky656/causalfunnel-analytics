@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CausalFunnel Analytics — User Behavior Dashboard</title>
+    <script>
+      // Boot trap: if the app bundle fails before React renders, show the
+      // real error message on screen instead of a blank page.
+      window.addEventListener('error', function (e) {
+        var root = document.getElementById('root');
+        if (root && root.children.length === 0) {
+          root.innerHTML =
+            '<div style="max-width:640px;margin:40px auto;padding:20px;font-family:monospace;font-size:13px;background:#fff;border-left:4px solid red;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.1)">' +
+            '<b>App failed to start:</b><br>' +
+            String((e && e.message) || e) +
+            '<br><br>Open DevTools (F12) → Console for the full stack trace.</div>';
+        }
+      }, true);
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

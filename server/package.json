@@ -1,0 +1,20 @@
+{
+  "name": "causalfunnel-analytics-server",
+  "version": "1.0.0",
+  "description": "User analytics backend — Express + Mongoose (ES modules)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "seed:demo": "node src/seed.js",
+    "sim:users": "node src/simulate.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.2.0",
+    "mongoose": "^8.4.0"
+  }
+}

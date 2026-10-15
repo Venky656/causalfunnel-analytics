@@ -1,0 +1,14 @@
+{
+  "name": "causalfunnel-analytics",
+  "version": "1.0.0",
+  "private": true,
+  "description": "User analytics platform — demo storefront, tracking script, Express API, MongoDB, React dashboard",
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm run install:all && npm --prefix client run build",
+    "start": "node server/src/index.js",
+    "seed:demo": "npm --prefix server run seed:demo"
+  }
+}
