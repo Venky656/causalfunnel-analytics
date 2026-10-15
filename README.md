@@ -96,15 +96,14 @@ Never commit `.env` (gitignored). Only `.env.example` files with placeholders ar
 ## Run
 
 ```bash
-# terminal 1 — backend (http://localhost:5000)
+# terminal 1 — backend (http://localhost:5001, PORT set in server/.env)
 npm run dev:server
 # terminal 2 — frontend (http://localhost:5173)
 npm run dev:client
 ```
 
-> macOS note: if port 5000 is taken by AirPlay Receiver, either disable it
-> (System Settings → General → AirDrop & Handoff) or run the backend with `PORT=5001` and set
-> `VITE_API_URL=http://localhost:5001` in `client/.env`.
+> Note: `server/.env` pins `PORT=5001` (macOS AirPlay Receiver occupies 5000) and
+> `client/.env` sets `VITE_API_URL=http://localhost:5001` to match.
 
 ## Seed demo data
 
@@ -235,8 +234,30 @@ Tracking Setup page in the app.
 
 ## Deployment
 
-- **Database**: MongoDB Atlas (whitelist the host, use the `mongodb+srv` URI).
-- **Backend**: any Node host (Render/Railway/Fly): set `PORT`, `MONGODB_URI`, `CLIENT_ORIGIN=<frontend URL>`.
-- **Frontend**: `npm run build` in `client/` → deploy `dist/` to Vercel/Netlify with `VITE_API_URL=<backend URL>`.
-- Update the Tracking Setup snippet domain after deploying — it is generated from your config.
-- Only claim deployment once the hosted health check and a live click-through succeed.
+The app runs as a **single Node process** in production: Express serves the API,
+the tracker scripts (`/tracker.js`, `/heatmap-overlay.js`) and the built React
+app (`client/dist`) from one port. No separate frontend host is needed.
+
+1. Push the repo to GitHub (this repo: `Venky656/causalfunnel-analytics`).
+2. On [Render](https://dashboard.render.com): **New → Web Service** → connect the repo:
+   - Build command: `npm run build` (installs `server/` + `client/` deps, then `tsc -b && vite build`)
+   - Start command: `npm start` (`node server/src/index.js`)
+   - Instance type: Free
+3. Environment variables:
+   - `MONGODB_URI` — the Atlas `mongodb+srv` URI from `server/.env` (includes the TLS flags)
+   - `NODE_ENV=production`
+   - `CLIENT_ORIGIN` — optional. Unset accepts any origin (ingest is rate-limited and
+     holds no credentials); set to your service URL(s), comma-separated, to restrict writes.
+4. Open the service URL. The dashboard, storefront and `/store/products?heatmap=1`
+   all load from one origin; production builds call the API with relative paths.
+
+Any other Node host works the same way — `PORT` is read from the environment.
+The server listens before MongoDB connects and retries in the background, so
+cold starts answer HTTP in under a second and fall back to an in-memory store
+until Atlas is reachable.
+
+Verify the deployment:
+
+```bash
+curl https://<your-service>.onrender.com/api/health   # {"ok":true,"db":"mongodb",...}
+```

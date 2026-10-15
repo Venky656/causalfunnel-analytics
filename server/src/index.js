@@ -17,7 +17,10 @@ process.on('unhandledRejection', (err) => {
 
 const PORT = Number(process.env.PORT ?? 5000);
 const MONGODB_URI = process.env.MONGODB_URI;
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
+// Unset/empty = accept any origin (fine for a public demo: the ingest API is
+// rate-limited and holds no credentials). Set to your deployed URL(s),
+// comma-separated, to lock writes down (local .env pins http://localhost:5173).
+const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? '';
 
 if (!MONGODB_URI) {
   console.warn('[config] MONGODB_URI not set — API will run on the in-memory store until it is provided.');
