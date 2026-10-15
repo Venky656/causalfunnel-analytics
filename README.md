@@ -1,5 +1,7 @@
 # CausalFunnel Analytics — User Behavior Platform
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Venky656/causalfunnel-analytics)
+
 A full-stack web analytics MVP: a demo storefront generates real browser events through a standalone
 tracking script → an Express API validates and stores them in MongoDB → a React dashboard shows
 sessions, user journeys and click heatmaps.

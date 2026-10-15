@@ -1,0 +1,20 @@
+# Render Blueprint — one-click deploy of the full stack (Express API +
+# built React app + tracker scripts, single Node process).
+# Dashboard: Render → New → Blueprint → select this repo.
+# Then set MONGODB_URI in the dashboard (Atlas URI with the same TLS flags
+# as server/.env) and deploy.
+services:
+  - type: web
+    name: causalfunnel-analytics
+    runtime: node
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CLIENT_ORIGIN
+        value: ''
+      - key: MONGODB_URI
+        sync: false
