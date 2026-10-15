@@ -2,6 +2,8 @@
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Venky656/causalfunnel-analytics)
 
+**Live demo:** https://causalfunnel-analytics-133b.onrender.com — dashboard, demo store, and element-anchored heatmaps running on Render + MongoDB Atlas.
+
 A full-stack web analytics MVP: a demo storefront generates real browser events through a standalone
 tracking script → an Express API validates and stores them in MongoDB → a React dashboard shows
 sessions, user journeys and click heatmaps.
@@ -22,6 +24,11 @@ sessions, user journeys and click heatmaps.
 - **Live vs demo separation**: tracker events are `data_source: "live"`; `npm run seed:demo` inserts
   ~24 clearly-labeled simulated sessions (`data_source: "demo"`, idempotent, never touches live data).
   Every view has an All / Live / Demo filter with an explicit banner.
+- **Purchase attribution**: the cart fires `CausalFunnelAnalytics.purchase()` on checkout, so
+  element cards and the overview show revenue, AOV, conversion rate, rev/click and rev/session.
+- **Never-drop ingest**: the server listens before MongoDB connects (cold starts answer in <1s),
+  retries Atlas in the background, and on a mid-operation TLS blip parks the event in the
+  memory store instead of 500ing; reads degrade with a `degraded: true` flag rather than failing.
 
 ## Tech stack
 
@@ -61,7 +68,9 @@ be double-counted. The frontend never talks to MongoDB directly.
 │   ├── src/seed.js   # demo dataset generator (npm run seed:demo)
 │   └── .env.example
 ├── tracker/tracker.js  # standalone installable script (also served at /tracker.js)
-├── package.json      # root helper scripts
+├── tracker/heatmap-overlay.js  # element-anchored live overlay (served at /heatmap-overlay.js)
+├── package.json      # root helper scripts (build forces --include=dev so prod installs keep vite/tsc)
+├── render.yaml       # Render Blueprint: one-click deploy (build/start/health check/env)
 └── README.md
 ```
 
@@ -77,7 +86,7 @@ be double-counted. The frontend never talks to MongoDB directly.
 ```bash
 npm run install:all
 cp server/.env.example server/.env     # then set MONGODB_URI (see below)
-cp client/.env.example client/.env     # default VITE_API_URL=http://localhost:5000
+cp client/.env.example client/.env     # default VITE_API_URL=http://localhost:5001 (dev only)
 ```
 
 ## Configure MongoDB Atlas
@@ -88,7 +97,7 @@ cp client/.env.example client/.env     # default VITE_API_URL=http://localhost:5
 4. Put it in `server/.env`:
 
 ```bash
-PORT=5000
+PORT=5001
 MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/analytics?retryWrites=true&w=majority
 CLIENT_ORIGIN=http://localhost:5173
 ```
@@ -140,7 +149,7 @@ Requires `MONGODB_URI` (seeding the ephemeral in-memory store is not supported).
 | GET | `/api/elements?url=&source=&limit=` | **Element-anchored heatmap data** — one ranked row per clicked element with sessions, purchases, revenue, AOV, conversion rate, rev/click, rev/session and its anchor rect |
 | GET | `/api/heatmap?page_url=&source=` | Alias of `/api/clicks` (earlier contract) |
 | GET | `/api/pages?source=` | Distinct page URLs with event/click counts |
-| GET | `/api/overview?source=` | Totals + 14-day series + top pages |
+| GET | `/api/overview?source=` | Totals + 14-day series + top pages + most-clicked elements |
 | GET | `/api/health` | `{ok, db: "mongodb"\|"memory", uptime_seconds, timestamp}` |
 | GET | `/tracker.js` | The standalone tracking script |
 | GET | `/heatmap-overlay.js` | Read-only live heat overlay script (anchors heat to real controls; records nothing) |
@@ -213,7 +222,8 @@ The original page-wide pixel canvas is still available — switch the dashboard 
   filter and labeled as such. If the page layout changed after capture, blobs reflect the old layout.
 - **Hotspot metrics** (rank, clicks, share of page clicks, unique sessions, most recent click, dominant
   element label) are computed client-side from the filtered click dataset — never hardcoded. Revenue /
-  purchase metrics are intentionally omitted: no order events exist to attribute them from.
+  purchase metrics come from real `purchase` events fired by the cart on checkout; pages with no
+  purchase events simply show zeros.
 - In-memory fallback keeps the app demoable without MongoDB, always disclosed via `/api/health` and the UI.
 - No auth/roles on the dashboard (out of scope); basic rate limiting on event ingest.
 - Product images use remote Unsplash CDN URLs with emoji-tile fallbacks so offline rendering never breaks.
@@ -233,33 +243,42 @@ Tracking Setup page in the app.
 | Empty dashboard, `db: memory` | Normal without MongoDB — browse the store for live data or configure `MONGODB_URI` + `npm run seed:demo` |
 | `seed:demo` refuses to run | `MONGODB_URI` missing — seeding needs a real database |
 | Images not loading | Offline CDN — emoji fallbacks render instead; layout is unaffected |
+| Render build fails with `TS2688: Cannot find type definition file for 'vite/client'` | `NODE_ENV=production` pruned devDependencies — root `build` now forces `--include=dev`; keep it |
+| Render shows `db: "memory"` | Atlas Network Access doesn't allow Render's hosts — add `0.0.0.0/0`; the app flips to `mongodb` within ~10s, no redeploy |
+| Render free tier slow on first visit | Service sleeps after 15 min idle — ping `/api/health` every ~10 min with a cron job to keep it warm |
 
 ## Deployment
 
 The app runs as a **single Node process** in production: Express serves the API,
 the tracker scripts (`/tracker.js`, `/heatmap-overlay.js`) and the built React
 app (`client/dist`) from one port. No separate frontend host is needed.
+Production builds call the API with same-origin relative paths, so the bundle
+contains no hardcoded host.
 
-1. Push the repo to GitHub (this repo: `Venky656/causalfunnel-analytics`).
-2. On [Render](https://dashboard.render.com): **New → Web Service** → connect the repo:
-   - Build command: `npm run build` (installs `server/` + `client/` deps, then `tsc -b && vite build`)
-   - Start command: `npm start` (`node server/src/index.js`)
-   - Instance type: Free
-3. Environment variables:
-   - `MONGODB_URI` — the Atlas `mongodb+srv` URI from `server/.env` (includes the TLS flags)
-   - `NODE_ENV=production`
-   - `CLIENT_ORIGIN` — optional. Unset accepts any origin (ingest is rate-limited and
-     holds no credentials); set to your service URL(s), comma-separated, to restrict writes.
-4. Open the service URL. The dashboard, storefront and `/store/products?heatmap=1`
-   all load from one origin; production builds call the API with relative paths.
+**Live:** https://causalfunnel-analytics-133b.onrender.com (Render free + Atlas).
 
-Any other Node host works the same way — `PORT` is read from the environment.
-The server listens before MongoDB connects and retries in the background, so
-cold starts answer HTTP in under a second and fall back to an in-memory store
-until Atlas is reachable.
+One-click deploy via the Blueprint in `render.yaml` (build `npm run build`,
+start `npm start`, health check `/api/health`):
+
+1. Click **Deploy to Render** at the top of this README (or Render → New → Blueprint → this repo).
+2. Set `MONGODB_URI` — your Atlas `mongodb+srv` URI. `NODE_ENV` is intentionally
+   **not** set: `NODE_ENV=production` makes npm prune devDependencies (`vite`,
+   `typescript`) and breaks the client build; the root `build` script also forces
+   `--include=dev` as a second layer of protection.
+3. In Atlas → Network Access, allow `0.0.0.0/0` so Render's hosts can connect.
+   Until then the app serves from the memory store (`db: "memory"` in
+   `/api/health`); once allowed it flips to `db: "mongodb"` by itself.
+4. Optional: ping `/api/health` every ~10 minutes (any cron service) to keep the
+   free tier from sleeping — otherwise the first visit after 15 min idle takes
+   ~30–60s to wake.
+
+Any other Node host works the same way — `PORT` is read from the environment,
+`CLIENT_ORIGIN` is optional (unset accepts any origin; same-origin writes are
+always allowed). The server listens before MongoDB connects and retries in the
+background, so cold starts answer HTTP in under a second.
 
 Verify the deployment:
 
 ```bash
-curl https://<your-service>.onrender.com/api/health   # {"ok":true,"db":"mongodb",...}
+curl https://causalfunnel-analytics-133b.onrender.com/api/health   # {"ok":true,"db":"mongodb",...}
 ```
